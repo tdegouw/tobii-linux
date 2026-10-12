@@ -57,7 +57,18 @@ another (centre, then two rounds of three). Look at the violet centre of each do
 shrunk (1.5 s). A green ring = saved, red = failed (details on stderr). Esc or q aborts.
 `--dry-run` shows the animation without touching the tracker.
 
-## Gaze cursor
+## Gaze focus / gaze cursor
+
+`et5-cursor` has two modes (`mode = "focus"|"cursor"` in `cursor.toml`, or
+`et5-cursor mode focus|cursor` at runtime). **focus** is the default: the window you look
+at gets keyboard focus after `dwell_ms` (400) when the gaze is at least `margin_px` (80)
+inside it; the pointer is not moved (Hyprland `cursor:no_warps` is enabled only for the
+single focus dispatch, in one IPC batch, then set back to `false`). Suspended while the
+mouse moved within `mouse_quiet_ms` (1000), when the workspace has a fullscreen window,
+when a floating window (dialog/popup) is focused, or when a launcher/menu layer is open.
+`et5-cursor hypr-debug` prints what it sees (read-only). Toggle notification: "Oogfocus aan/uit".
+
+### Setup
 
 ```sh
 install -m755 target/release/et5-{cli,calibrate,cursor} ~/.local/bin/
@@ -70,7 +81,7 @@ The daemon starts **off**. `et5-cursor toggle|on|off|status` talks to it over
 Hyprland/Omarchy binding (`~/.config/hypr/bindings.lua`):
 
 ```lua
-o.bind("SUPER + ALT + E", "Oogbesturing aan/uit", "/home/ted/.local/bin/et5-cursor toggle")
+o.bind("SUPER + ALT + E", "Oogfocus aan/uit", "/home/ted/.local/bin/et5-cursor toggle")
 ```
 
 Behaviour: one-euro filter per axis → fixation dead zone (cursor stays put while you
@@ -98,6 +109,9 @@ Tuning: `~/.config/tobii-et5/cursor.toml` (created on first start), then
 - Inbound frames: `LE32 id, LE32 total_len (incl. 8-byte header)`; outbound: `LE32 0, LE32 content_len`.
 - Responses carry `0x00000001` in the upper half of the property field.
 - AUTH_VERIFY/MOUNTING_CONFIG answer `0x20000505`; streaming still works.
+- Re-setting the USB configuration while uvcvideo holds ifaces 1/2 makes xhci log
+  "add endpoint 0x82 without dropping it" and can wedge the tracker; only set it if needed.
+  A libusb reset can make it drop off the bus (needs replug).
 - Roughly every other session misbehaves (silent gaze stream, or an unanswered request
   such as PAUSE_SET); reopening fixes it (`Device::open_ready` / `open_streaming` retry).
 

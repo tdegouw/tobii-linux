@@ -15,10 +15,13 @@ pub fn open() -> Result<(Handle, String)> {
     if h.kernel_driver_active(0).unwrap_or(false) {
         h.detach_kernel_driver(0)?;
     }
-    let _ = h.set_active_configuration(1);
+    // Only set the configuration if needed: re-setting it while uvcvideo holds
+    // ifaces 1/2 makes xhci complain ("add endpoint 0x82") and can wedge the device.
+    if h.active_configuration().unwrap_or(0) != 1 { let _ = h.set_active_configuration(1); }
     h.claim_interface(0)?;
-    // vendor request that enables the bulk endpoints
-    h.write_control(0x41, 0x41, 0, 0, &[], Duration::from_secs(5))?;
+    // vendor request that enables the bulk endpoints.
+    // NB: do not libusb-reset on failure: that made the tracker drop off the bus.
+    h.write_control(0x41, 0x41, 0, 0, &[], Duration::from_secs(2))?;
     Ok((Arc::new(h), serial))
 }
 

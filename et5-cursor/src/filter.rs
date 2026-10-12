@@ -49,6 +49,15 @@ pub struct GazeFilter { cfg: FilterConfig, fx: OneEuro, fy: OneEuro, cursor: Opt
 impl GazeFilter {
     pub fn new(cfg: FilterConfig) -> Self { GazeFilter { cfg, fx: OneEuro::new(), fy: OneEuro::new(), cursor: None, last_raw: None } }
     pub fn reset(&mut self) { self.fx = OneEuro::new(); self.fy = OneEuro::new(); self.last_raw = None; }
+    /// One-euro smoothed position only (no dead zone), for focus mode.
+    pub fn smooth(&mut self, x: f64, y: f64, dt: f64) -> (f64, f64) {
+        let dt = dt.clamp(0.005, 0.2);
+        if let Some((lx, ly)) = self.last_raw {
+            if ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() > self.cfg.saccade_px { self.reset(); }
+        }
+        self.last_raw = Some((x, y));
+        (self.fx.f(x, dt, &self.cfg), self.fy.f(y, dt, &self.cfg))
+    }
     /// Feed a raw pixel sample; returns a new cursor position if it should move.
     pub fn update(&mut self, x: f64, y: f64, dt: f64) -> Option<(i32, i32)> {
         let dt = dt.clamp(0.005, 0.2);
