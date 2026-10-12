@@ -110,9 +110,9 @@ Values out of range are clamped and logged.
 
 ## AI Disclaimer
 
-Most of this code was written by an AI assistant (Grok Bot) under Ted de Gouw's direction,
+Most of this code was written by an AI assistant (Grok Bot) under the repository owner's direction,
 based on the reverse-engineering work of nottobii and tobiifree, and reviewed and tested by
-Ted on his own hardware. It is not affiliated with Tobii, it is experimental, and you use it
+the owner on their own hardware. It is not affiliated with Tobii, it is experimental, and you use it
 at your own risk. See [AI_DISCLAIMER.md](AI_DISCLAIMER.md).
 
 ## Credits

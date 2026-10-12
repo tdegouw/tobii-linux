@@ -1,8 +1,8 @@
 # AI disclaimer
 
 Most of the code and documentation in this repository was written by an AI assistant
-(Grok Bot) under the direction of Ted de Gouw, who specified the goals, made the design
-decisions, and reviewed and tested the result on his own hardware (Tobii Eye Tracker 5,
+(Grok Bot) under the direction of the repository owner, who specified the goals, made the design
+decisions, and reviewed and tested the result on their own hardware (Tobii Eye Tracker 5,
 Arch Linux / Omarchy, Hyprland, 49" 5120x1440 display).
 
 - The USB protocol is not documented by Tobii. Everything here builds on the
