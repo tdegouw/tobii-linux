@@ -1,122 +1,128 @@
 # tobii-linux
 
-Use the Tobii Eye Tracker 5 (USB `2104:0313`, "EyeChip", IS5) on Linux — plain Rust + libusb,
-no Nix, no Windows runtime, no kernel module.
+Use the **Tobii Eye Tracker 5** (USB `2104:0313`, "EyeChip") on Linux with plain Rust and
+libusb. You don't need Nix, the Windows runtime, or a kernel module.
 
-Protocol knowledge comes from [nottobii](https://github.com/puffnfresh/nottobii) and
-[tobiifree](https://github.com/Aetherall/tobiifree) (both GPL-3). This project is GPL-3.0-or-later.
+## Features
 
-## Layout
+- Userspace driver library (`tobii-et5`): init and auth, gaze stream (~33 Hz), calibration,
+  automatic recovery from the device's every-other-session quirk.
+- `et5-cli`: device info, live gaze stream with rate and pixel coordinates.
+- `et5-calibrate`: full-screen Wayland calibration (7 points), saved per tracker serial.
+- `et5-cursor`: background daemon with two modes:
+  - **focus** (default): the window you look at gets keyboard focus; the mouse pointer is
+    left alone (Hyprland).
+  - **cursor**: gaze moves the pointer through a virtual uinput device.
+- Toggle hotkey with notification, systemd user service, very low CPU (~0.2 % of one core).
 
-```
-tobii-et5/   library: rusb transport, TLV framing, init/auth/subscribe, gaze parsing,
-             frequency queries, calibration commands (calibration.rs, untested)
-et5-cli/     command-line tool
-et5-calibrate/ fullscreen Wayland (layer-shell) calibration overlay
-et5-cursor/  gaze cursor daemon (uinput absolute pointer) + toggle client
-systemd/     et5-cursor.service (user unit)
-udev/        70-tobii-et5.rules (USB + /dev/uinput access for the logged-in user)
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for how it works.
 
-## Setup (Arch)
+## Requirements
+
+- Tobii Eye Tracker 5 (tested: IS50F, firmware `02a1a6a977`)
+- Linux with libusb 1.0, a Wayland compositor with layer-shell for calibration,
+  Hyprland for focus mode (tested 0.56, Lua config / Omarchy)
+- Rust toolchain (rustup), `pkgconf`, `notify-send` (libnotify) for notifications
+
+## Install
 
 ```sh
-sudo pacman -S --needed libusb pkgconf          # build deps
+# 1. toolchain + build deps (Arch)
+sudo pacman -S --needed libusb pkgconf libnotify
 curl https://sh.rustup.rs | sh -s -- -y --no-modify-path && source ~/.cargo/env
+
+# 2. device access for your user (tracker + /dev/uinput)
 sudo cp udev/70-tobii-et5.rules /etc/udev/rules.d/
+sudo modprobe uinput
 sudo udevadm control --reload && sudo udevadm trigger   # then replug the tracker
-```
 
-## Build & run
-
-```sh
+# 3. build and install
 cargo build --release
-target/release/et5-cli info          # serial, model, firmware, frequency
-target/release/et5-cli stream 10     # print samples + measured rate
-target/release/et5-cli freq list     # supported frequency modes
-target/release/et5-cli -v ...        # log every request/response status
-ET5_DEBUG=1 target/release/et5-cli stream 2   # log every USB transfer
-```
-
-## Configuration
-
-`~/.config/tobii-et5/config.toml` is created on first run. Default is a 49" 32:9
-(5120x1440, ~1193x336 mm) with the tracker centred under the bottom edge — measure
-your screen and adjust `width_mm`, `height_mm`, `bottom_offset_mm`, `tracker_x_offset_mm`.
-A calibration blob at `~/.config/tobii-et5/<serial>/calibration.bin` is uploaded on init if present.
-
-## Calibration
-
-```sh
-cargo build --release && target/release/et5-calibrate
-```
-
-Sit normally (~60–80 cm). A dark overlay covers the screen: a pulsing dot while the tracker
-connects (a few seconds), a 3 s countdown (closing ring + dots), then 7 blue dots one after
-another (centre, then two rounds of three). Look at the violet centre of each dot until it has
-shrunk (1.5 s). A green ring = saved, red = failed (details on stderr). Esc or q aborts.
-`--dry-run` shows the animation without touching the tracker.
-
-## Gaze focus / gaze cursor
-
-`et5-cursor` has two modes (`mode = "focus"|"cursor"` in `cursor.toml`, or
-`et5-cursor mode focus|cursor` at runtime). **focus** is the default: the window you look
-at gets keyboard focus after `dwell_ms` (400) when the gaze is at least `margin_px` (80)
-inside it; the pointer is not moved (Hyprland `cursor:no_warps` is enabled only for the
-single focus dispatch, in one IPC batch, then set back to `false`). Suspended while the
-mouse moved within `mouse_quiet_ms` (1000), when the workspace has a fullscreen window,
-when a floating window (dialog/popup) is focused, or when a launcher/menu layer is open.
-`et5-cursor hypr-debug` prints what it sees (read-only). Toggle notification: "Oogfocus aan/uit".
-
-### Setup
-
-```sh
 install -m755 target/release/et5-{cli,calibrate,cursor} ~/.local/bin/
+
+# 4. service
 cp systemd/et5-cursor.service ~/.config/systemd/user/
 systemctl --user daemon-reload && systemctl --user enable --now et5-cursor
 ```
 
-The daemon starts **off**. `et5-cursor toggle|on|off|status` talks to it over
-`$XDG_RUNTIME_DIR/et5-cursor.sock` and shows a notification ("Oogbesturing aan/uit").
-Hyprland/Omarchy binding (`~/.config/hypr/bindings.lua`):
+**Hotkey** (Omarchy, `~/.config/hypr/bindings.lua`):
 
 ```lua
-o.bind("SUPER + ALT + E", "Oogfocus aan/uit", "/home/ted/.local/bin/et5-cursor toggle")
+o.bind("SUPER + ALT + E", "Oogfocus aan/uit", "/home/<you>/.local/bin/et5-cursor toggle")
 ```
 
-Behaviour: one-euro filter per axis → fixation dead zone (cursor stays put while you
-look within `deadzone_px` of it) → eases toward the gaze (`follow`) or jumps on a saccade
-(`saccade_px`). No eyes detected = cursor frozen. Tracker unplugged/silent = reconnect
-every 3 s. Only moves the pointer; clicking stays on the mouse.
+## Usage
 
-Tuning: `~/.config/tobii-et5/cursor.toml` (created on first start), then
-`systemctl --user restart et5-cursor`:
+```sh
+et5-cli info                 # serial, model, firmware, frequency, calibration loaded?
+et5-cli stream 10            # samples, pixel coordinates, measured Hz
+et5-cli freq list            # supported frequency modes
+et5-cli -v …                 # log request/response status;  ET5_DEBUG=1 logs USB transfers
+
+et5-calibrate                # calibrate (sit normally, follow the dots); Esc/q aborts
+et5-calibrate --dry-run      # animation only, no tracker
+
+et5-cursor toggle|on|off     # control the daemon (notification "Oogfocus aan/uit")
+et5-cursor mode focus|cursor # switch mode at runtime
+et5-cursor status            # e.g. "on focus"
+et5-cursor hypr-debug        # what focus mode sees (read-only)
+```
+
+What you see during calibration: a dark overlay, a pulsing dot while connecting, a 3 s
+countdown, then 7 shrinking blue dots (centre, then two rounds of three). Look at each violet
+centre until it is small. A green ring means saved; red means failed (see terminal output).
+
+The daemon starts **OFF** after every login; press the hotkey to enable.
+
+## Configuration
+
+`~/.config/tobii-et5/config.toml`: display geometry (default: 49" 32:9, 5120×1440,
+1193×336 mm, tracker centred 10 mm below the screen).
+
+`~/.config/tobii-et5/cursor.toml` (restart the service after editing):
 
 | key | default | effect |
 |---|---|---|
-| `min_cutoff` | 0.6 | lower = smoother but laggier when still |
-| `beta` | 0.004 | higher = less lag on fast movements |
-| `deadzone_px` | 60 | bigger = steadier cursor, needs larger gaze shift to move |
-| `follow` | 0.5 | fraction of the distance moved per sample (33 Hz) |
-| `saccade_px` | 600 | jumps beyond this snap immediately |
+| `mode` | `"focus"` | `"focus"` or `"cursor"` |
+| `focus.dwell_ms` | 400 | how long you must look at another window before it gets focus |
+| `focus.margin_px` | 80 | gaze must be this far inside the window (hysteresis) |
+| `focus.mouse_quiet_ms` | 1000 | ignore gaze this long after the mouse moved |
+| `filter.min_cutoff` | 0.6 | lower = smoother but laggier when still |
+| `filter.beta` | 0.004 | higher = less lag on fast eye movements |
+| `filter.deadzone_px` | 60 | cursor mode: radius in which the pointer stays put |
+| `filter.follow` | 0.5 | cursor mode: fraction of the distance moved per sample |
+| `filter.saccade_px` | 600 | jumps beyond this reset the filter / snap |
 
-## Findings (firmware on IS50F)
+Values out of range are clamped and logged.
 
-- Gaze streams **without** a calibration blob (an empty blob is rejected, `0x20000503`).
-- Output rate is **~33 Hz**, one 1724-byte message per USB transfer (no batching).
-  FREQUENCIES_GET/LIST report a single mode `{132, 33}` — 132 Hz camera, 33 Hz gaze output.
-  No setter is known; probing `0x067C` resets the tracker.
-- Inbound frames: `LE32 id, LE32 total_len (incl. 8-byte header)`; outbound: `LE32 0, LE32 content_len`.
-- Responses carry `0x00000001` in the upper half of the property field.
-- AUTH_VERIFY/MOUNTING_CONFIG answer `0x20000505`; streaming still works.
-- Re-setting the USB configuration while uvcvideo holds ifaces 1/2 makes xhci log
-  "add endpoint 0x82 without dropping it" and can wedge the tracker; only set it if needed.
-  A libusb reset can make it drop off the bus (needs replug).
-- Roughly every other session misbehaves (silent gaze stream, or an unanswered request
-  such as PAUSE_SET); reopening fixes it (`Device::open_ready` / `open_streaming` retry).
+## Troubleshooting
 
-## Roadmap
+- **Logs:** `journalctl --user -u et5-cursor -f`. Expect `tracker IS50F-… streaming`.
+- **`no Tobii ET5 found` / kernel `device descriptor read error`:** unplug and replug the
+  tracker. The daemon reconnects by itself within ~3 s.
+- **`usb: Access denied`:** the udev rule is not active. Check
+  `getfacl /dev/bus/usb/*/*` for your user, then replug.
+- **Gaze is offset:** fix `config.toml` geometry, then run `et5-calibrate` again.
+- **Focus doesn't switch:** check `et5-cursor status` (must be `on focus`), keep the mouse
+  still for a second, and look well inside the window; `et5-cursor hypr-debug` shows
+  `blocked true` when a fullscreen window, popup or launcher is active.
+- **Only ~33 Hz:** that is the device's output rate (see Known limits in ARCHITECTURE.md).
 
-1. ~~`et5-calibrate`~~ done; validate accuracy after a real calibration.
-2. ~~gaze cursor~~ done (`et5-cursor`).
-3. Optional: gaze + key click, per-monitor mapping, udev-triggered service start.
+## AI Disclaimer
+
+Most of this code was written by an AI assistant (Grok Bot) under Ted de Gouw's direction,
+based on the reverse-engineering work of nottobii and tobiifree, and reviewed and tested by
+Ted on his own hardware. It is not affiliated with Tobii, it is experimental, and you use it
+at your own risk. See [AI_DISCLAIMER.md](AI_DISCLAIMER.md).
+
+## Credits
+
+- [nottobii](https://github.com/puffnfresh/nottobii) by puffnfresh: protocol constants,
+  init/auth sequence, gaze and calibration format (GPL-3.0)
+- [tobiifree](https://github.com/Aetherall/tobiifree) by Aetherall: TTP/TLV protocol work (GPL-3.0)
+- [smithay-client-toolkit](https://github.com/Smithay/client-toolkit) (layer-shell example structure, MIT)
+- One-euro filter: Casiez, Roussel, Vogel, CHI 2012
+
+## License
+
+GPL-3.0-or-later, see [LICENSE](LICENSE).
