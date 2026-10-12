@@ -21,9 +21,7 @@ fn run() -> tobii_et5::Result<()> {
         let secs: f64 = rest.first().and_then(|s| s.parse().ok()).unwrap_or(10.0);
         return stream(Device::open_streaming(cfg, verbose)?, secs);
     }
-    let mut dev = Device::open(cfg)?;
-    dev.verbose = verbose;
-    dev.init()?;
+    let mut dev = Device::open_ready(cfg, verbose)?;
     match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
         ["info"] => {
             for s in dev.unit_info()? { println!("{s}"); }

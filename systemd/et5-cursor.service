@@ -1,0 +1,13 @@
+[Unit]
+Description=Tobii Eye Tracker 5 gaze cursor (et5-cursor)
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+ExecStart=%h/.local/bin/et5-cursor daemon
+Restart=on-failure
+RestartSec=3
+Nice=5
+
+[Install]
+WantedBy=graphical-session.target

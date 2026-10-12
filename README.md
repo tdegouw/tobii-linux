@@ -13,6 +13,8 @@ tobii-et5/   library: rusb transport, TLV framing, init/auth/subscribe, gaze par
              frequency queries, calibration commands (calibration.rs, untested)
 et5-cli/     command-line tool
 et5-calibrate/ fullscreen Wayland (layer-shell) calibration overlay
+et5-cursor/  gaze cursor daemon (uinput absolute pointer) + toggle client
+systemd/     et5-cursor.service (user unit)
 udev/        70-tobii-et5.rules (USB + /dev/uinput access for the logged-in user)
 ```
 
@@ -55,6 +57,38 @@ another (centre, then two rounds of three). Look at the violet centre of each do
 shrunk (1.5 s). A green ring = saved, red = failed (details on stderr). Esc or q aborts.
 `--dry-run` shows the animation without touching the tracker.
 
+## Gaze cursor
+
+```sh
+install -m755 target/release/et5-{cli,calibrate,cursor} ~/.local/bin/
+cp systemd/et5-cursor.service ~/.config/systemd/user/
+systemctl --user daemon-reload && systemctl --user enable --now et5-cursor
+```
+
+The daemon starts **off**. `et5-cursor toggle|on|off|status` talks to it over
+`$XDG_RUNTIME_DIR/et5-cursor.sock` and shows a notification ("Oogbesturing aan/uit").
+Hyprland/Omarchy binding (`~/.config/hypr/bindings.lua`):
+
+```lua
+o.bind("SUPER + ALT + E", "Oogbesturing aan/uit", "/home/ted/.local/bin/et5-cursor toggle")
+```
+
+Behaviour: one-euro filter per axis → fixation dead zone (cursor stays put while you
+look within `deadzone_px` of it) → eases toward the gaze (`follow`) or jumps on a saccade
+(`saccade_px`). No eyes detected = cursor frozen. Tracker unplugged/silent = reconnect
+every 3 s. Only moves the pointer; clicking stays on the mouse.
+
+Tuning: `~/.config/tobii-et5/cursor.toml` (created on first start), then
+`systemctl --user restart et5-cursor`:
+
+| key | default | effect |
+|---|---|---|
+| `min_cutoff` | 0.6 | lower = smoother but laggier when still |
+| `beta` | 0.004 | higher = less lag on fast movements |
+| `deadzone_px` | 60 | bigger = steadier cursor, needs larger gaze shift to move |
+| `follow` | 0.5 | fraction of the distance moved per sample (33 Hz) |
+| `saccade_px` | 600 | jumps beyond this snap immediately |
+
 ## Findings (firmware on IS50F)
 
 - Gaze streams **without** a calibration blob (an empty blob is rejected, `0x20000503`).
@@ -64,11 +98,11 @@ shrunk (1.5 s). A green ring = saved, red = failed (details on stderr). Esc or q
 - Inbound frames: `LE32 id, LE32 total_len (incl. 8-byte header)`; outbound: `LE32 0, LE32 content_len`.
 - Responses carry `0x00000001` in the upper half of the property field.
 - AUTH_VERIFY/MOUNTING_CONFIG answer `0x20000505`; streaming still works.
-- Roughly every other session stays silent after a successful subscribe; reopening
-  the device fixes it (`Device::open_streaming` does this automatically).
+- Roughly every other session misbehaves (silent gaze stream, or an unanswered request
+  such as PAUSE_SET); reopening fixes it (`Device::open_ready` / `open_streaming` retry).
 
 ## Roadmap
 
 1. ~~`et5-calibrate`~~ done; validate accuracy after a real calibration.
-2. `et5d`: gaze → filter (Kalman / 1€) → uinput absolute pointer, toggle hotkey.
-3. systemd user service, started via udev `ENV{SYSTEMD_USER_WANTS}` on plug-in.
+2. ~~gaze cursor~~ done (`et5-cursor`).
+3. Optional: gaze + key click, per-monitor mapping, udev-triggered service start.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["tobii-et5", "et5-cli", "et5-calibrate"]
+members = ["tobii-et5", "et5-cli", "et5-calibrate", "et5-cursor"]
 
 [workspace.package]
 version = "0.1.0"

@@ -143,18 +143,34 @@ impl Device {
         }
     }
 
-    /// Open, init and start gaze streaming. On this firmware roughly every other
-    /// session stays silent after a successful subscribe (re-subscribing in the
-    /// same session does not help); closing and reopening the device does.
+    /// Open and init, reopening the device on failure. On this firmware roughly
+    /// every other session misbehaves (a request such as PAUSE_SET goes unanswered,
+    /// or the gaze stream stays silent); a fresh open fixes it.
+    pub fn open_ready(config: Config, verbose: bool) -> Result<Self> {
+        Self::open_retry(config, verbose, false)
+    }
+
+    /// Open, init and start gaze streaming, with the same reopen-on-failure logic.
     pub fn open_streaming(config: Config, verbose: bool) -> Result<Self> {
-        let mut last = Error::Timeout("gaze stream");
-        for attempt in 0..3 {
-            let mut d = Device::open(config.clone())?;
-            d.verbose = verbose;
-            d.init()?;
-            match d.start_gaze() {
-                Ok(()) => return Ok(d),
-                Err(e) => { if verbose { eprintln!("  no gaze (attempt {attempt}), reopening"); } last = e; }
+        Self::open_retry(config, verbose, true)
+    }
+
+    fn open_retry(config: Config, verbose: bool, stream: bool) -> Result<Self> {
+        let mut last = Error::NoDevice;
+        for attempt in 0..4 {
+            let r = Device::open(config.clone()).and_then(|mut d| {
+                d.verbose = verbose;
+                d.init()?;
+                if stream { d.start_gaze()?; }
+                Ok(d)
+            });
+            match r {
+                Ok(d) => return Ok(d),
+                Err(Error::NoDevice) => return Err(Error::NoDevice),
+                Err(e) => {
+                    if verbose { eprintln!("  open attempt {attempt} failed: {e}; reopening"); }
+                    last = e;
+                }
             }
         }
         Err(last)
