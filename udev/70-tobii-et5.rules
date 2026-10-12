@@ -1,0 +1,2 @@
+SUBSYSTEM=="usb", ATTRS{idVendor}=="2104", ATTRS{idProduct}=="0313", MODE="0660", TAG+="uaccess"
+KERNEL=="uinput", TAG+="uaccess"

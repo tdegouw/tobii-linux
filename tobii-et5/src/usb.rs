@@ -1,0 +1,24 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+use crate::{protocol::*, Error, Result};
+use rusb::{DeviceHandle, GlobalContext};
+use std::{sync::Arc, time::Duration};
+
+pub type Handle = Arc<DeviceHandle<GlobalContext>>;
+
+pub fn open() -> Result<Handle> {
+    let h = rusb::open_device_with_vid_pid(VENDOR_ID, PRODUCT_ID).ok_or(Error::NoDevice)?;
+    // uvcvideo only binds ifaces 1/2; iface 0 is vendor-specific, detach just in case.
+    if h.kernel_driver_active(0).unwrap_or(false) {
+        h.detach_kernel_driver(0)?;
+    }
+    let _ = h.set_active_configuration(1);
+    h.claim_interface(0)?;
+    // vendor request that enables the bulk endpoints
+    h.write_control(0x41, 0x41, 0, 0, &[], Duration::from_secs(5))?;
+    Ok(Arc::new(h))
+}
+
+pub fn write(h: &Handle, data: &[u8]) -> Result<()> {
+    h.write_bulk(EP_OUT, data, Duration::from_secs(5))?;
+    Ok(())
+}

@@ -1,0 +1,8 @@
+[package]
+name = "et5-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tobii-et5 = { path = "../tobii-et5" }
