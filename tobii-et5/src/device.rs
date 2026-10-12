@@ -24,12 +24,13 @@ pub struct Device {
     config: Config,
     calib_blob: Option<Vec<u8>>,
     pending: Option<(Instant, GazeFrame)>,
+    serial: String,
     pub verbose: bool,
 }
 
 impl Device {
     pub fn open(config: Config) -> Result<Self> {
-        let h = usb::open()?;
+        let (h, serial) = usb::open()?;
         let (resp_tx, resp_rx) = mpsc::channel();
         let (gaze_tx, gaze_rx) = mpsc::channel();
         let stop = Arc::new(AtomicBool::new(false));
@@ -59,8 +60,8 @@ impl Device {
                 }
             }
         });
-        let calib_blob = calib_path().and_then(|p| std::fs::read(p).ok()).filter(|b| !b.is_empty());
-        Ok(Device { h, seq: 0, resp_rx, gaze_rx, stop, reader: Some(reader), config, calib_blob, pending: None, verbose: false })
+        let calib_blob = calib_path(&serial).and_then(|p| std::fs::read(p).ok()).filter(|b| !b.is_empty());
+        Ok(Device { h, seq: 0, resp_rx, gaze_rx, stop, reader: Some(reader), config, calib_blob, pending: None, serial, verbose: false })
     }
 
     fn send(&mut self, prop: u64, args: &[u8]) -> Result<u32> {
@@ -194,10 +195,17 @@ impl Device {
     }
 
     pub(crate) fn raw_request(&mut self, prop: u64, args: &[u8]) -> Result<Message> { self.req(prop, args) }
+    pub(crate) fn raw_request_t(&mut self, prop: u64, args: &[u8], t: Duration) -> Result<Message> { self.request(prop, args, t) }
+    /// USB serial number, e.g. `IS50F-100200242231`.
+    pub fn serial(&self) -> &str { &self.serial }
+    pub fn config(&self) -> &Config { &self.config }
+    /// Whether a stored calibration blob was found (and is uploaded by `init`).
+    pub fn has_calibration(&self) -> bool { self.calib_blob.is_some() }
 }
 
-pub fn calib_path() -> Option<std::path::PathBuf> {
-    Config::path().parent().map(|d| d.join("calibration.bin"))
+/// `~/.config/tobii-et5/<serial>/calibration.bin`
+pub fn calib_path(serial: &str) -> Option<std::path::PathBuf> {
+    Config::path().parent().map(|d| d.join(serial).join("calibration.bin"))
 }
 
 impl Drop for Device {

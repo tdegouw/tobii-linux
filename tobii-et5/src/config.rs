@@ -49,6 +49,11 @@ impl Config {
             }
         }
     }
+    /// Map normalised gaze (0..1) to display pixels (clamped).
+    pub fn to_pixels(&self, g: [f64; 2]) -> (i32, i32) {
+        let d = &self.display;
+        ((g[0].clamp(0.0, 1.0) * d.width_px as f64) as i32, (g[1].clamp(0.0, 1.0) * d.height_px as f64) as i32)
+    }
     /// Display corners TL, TR, BL in device units (µm).
     pub fn corners_um(&self) -> [[f64; 3]; 3] {
         let d = &self.display;

@@ -12,6 +12,7 @@ Protocol knowledge comes from [nottobii](https://github.com/puffnfresh/nottobii)
 tobii-et5/   library: rusb transport, TLV framing, init/auth/subscribe, gaze parsing,
              frequency queries, calibration commands (calibration.rs, untested)
 et5-cli/     command-line tool
+et5-calibrate/ fullscreen Wayland (layer-shell) calibration overlay
 udev/        70-tobii-et5.rules (USB + /dev/uinput access for the logged-in user)
 ```
 
@@ -40,7 +41,19 @@ ET5_DEBUG=1 target/release/et5-cli stream 2   # log every USB transfer
 `~/.config/tobii-et5/config.toml` is created on first run. Default is a 49" 32:9
 (5120x1440, ~1193x336 mm) with the tracker centred under the bottom edge — measure
 your screen and adjust `width_mm`, `height_mm`, `bottom_offset_mm`, `tracker_x_offset_mm`.
-A calibration blob at `~/.config/tobii-et5/calibration.bin` is uploaded on init if present.
+A calibration blob at `~/.config/tobii-et5/<serial>/calibration.bin` is uploaded on init if present.
+
+## Calibration
+
+```sh
+cargo build --release && target/release/et5-calibrate
+```
+
+Sit normally (~60–80 cm). A dark overlay covers the screen: a pulsing dot while the tracker
+connects (a few seconds), a 3 s countdown (closing ring + dots), then 7 blue dots one after
+another (centre, then two rounds of three). Look at the violet centre of each dot until it has
+shrunk (1.5 s). A green ring = saved, red = failed (details on stderr). Esc or q aborts.
+`--dry-run` shows the animation without touching the tracker.
 
 ## Findings (firmware on IS50F)
 
@@ -56,7 +69,6 @@ A calibration blob at `~/.config/tobii-et5/calibration.bin` is uploaded on init 
 
 ## Roadmap
 
-1. `et5-calibrate`: layer-shell overlay (smithay-client-toolkit) on the 5120x1440 output,
-   7-point calibration via `calibration.rs`, saves `calibration.bin`.
+1. ~~`et5-calibrate`~~ done; validate accuracy after a real calibration.
 2. `et5d`: gaze → filter (Kalman / 1€) → uinput absolute pointer, toggle hotkey.
 3. systemd user service, started via udev `ENV{SYSTEMD_USER_WANTS}` on plug-in.

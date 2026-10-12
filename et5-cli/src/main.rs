@@ -29,6 +29,7 @@ fn run() -> tobii_et5::Result<()> {
             for s in dev.unit_info()? { println!("{s}"); }
             println!("frequency: {:?}", dev.frequency()?);
             println!("config: {}", Config::path().display());
+            println!("calibration loaded: {}", dev.has_calibration());
         }
         ["freq", "list"] => for f in dev.frequencies()? { println!("{} / {}", f.a, f.b) },
         ["freq", "get"] => println!("{:?}", dev.frequency()?),
@@ -57,7 +58,8 @@ fn stream(mut dev: Device, secs: f64) -> tobii_et5::Result<()> {
                 prev = Some(at);
                 if n % 33 == 1 {
                     let c = g.combined.unwrap_or([f64::NAN; 2]);
-                    println!("{:6.2}s  L=({:.3},{:.3}) R=({:.3},{:.3}) C=({:.3},{:.3}) eyeZ={:.0}mm",
+                    let px = if g.left.valid || g.right.valid { let (x, y) = dev.config().to_pixels(c); format!("({x:4},{y:4})px") } else { "  (no eyes)  ".into() };
+                    println!("{:6.2}s  {px}  L=({:.3},{:.3}) R=({:.3},{:.3}) C=({:.3},{:.3}) eyeZ={:.0}mm",
                         t0.elapsed().as_secs_f64(), g.left.gaze[0], g.left.gaze[1], g.right.gaze[0], g.right.gaze[1],
                         c[0], c[1], g.left.origin[2] / 1000.0);
                 }

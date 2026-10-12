@@ -5,8 +5,12 @@ use std::{sync::Arc, time::Duration};
 
 pub type Handle = Arc<DeviceHandle<GlobalContext>>;
 
-pub fn open() -> Result<Handle> {
+/// Opens the tracker; returns the handle and the USB serial number.
+pub fn open() -> Result<(Handle, String)> {
     let h = rusb::open_device_with_vid_pid(VENDOR_ID, PRODUCT_ID).ok_or(Error::NoDevice)?;
+    let serial = h.device().device_descriptor().ok()
+        .and_then(|d| h.read_serial_number_string_ascii(&d).ok())
+        .unwrap_or_else(|| "unknown".into());
     // uvcvideo only binds ifaces 1/2; iface 0 is vendor-specific, detach just in case.
     if h.kernel_driver_active(0).unwrap_or(false) {
         h.detach_kernel_driver(0)?;
@@ -15,7 +19,7 @@ pub fn open() -> Result<Handle> {
     h.claim_interface(0)?;
     // vendor request that enables the bulk endpoints
     h.write_control(0x41, 0x41, 0, 0, &[], Duration::from_secs(5))?;
-    Ok(Arc::new(h))
+    Ok((Arc::new(h), serial))
 }
 
 pub fn write(h: &Handle, data: &[u8]) -> Result<()> {
