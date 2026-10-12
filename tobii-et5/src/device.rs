@@ -2,9 +2,18 @@
 //! High-level device: init/auth/subscribe, request/response, gaze stream.
 //! Init sequence follows nottobii's `run_init_sequence`, minus calibration blob
 //! uploads when no blob is present (the device rejects an empty blob, 0x20000503).
-use crate::{config::Config, gaze, protocol::*, tlv::{self, Message}, usb, Error, GazeFrame, Result};
+use crate::{
+    config::Config,
+    gaze,
+    protocol::*,
+    tlv::{self, Message},
+    usb, Error, GazeFrame, Result,
+};
 use std::{
-    sync::{atomic::{AtomicBool, Ordering}, mpsc, Arc},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -12,7 +21,10 @@ use std::{
 /// One entry from FREQUENCIES_GET / FREQUENCIES_LIST (struct 0x22af8).
 /// Observed on IS50F fw: a single mode `{132, 33}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Frequency { pub a: u32, pub b: u32 }
+pub struct Frequency {
+    pub a: u32,
+    pub b: u32,
+}
 
 pub struct Device {
     h: usb::Handle,
@@ -46,27 +58,61 @@ impl Device {
                     Ok(n) => {
                         let now = Instant::now();
                         df.push(&buf[..n], &mut msgs);
-                        if debug { eprintln!("  rx {n} B -> {:?}", msgs.iter().map(|m| (m.msg_type, m.prop)).collect::<Vec<_>>()); }
+                        if debug {
+                            eprintln!(
+                                "  rx {n} B -> {:?}",
+                                msgs.iter()
+                                    .map(|m| (m.msg_type, m.prop))
+                                    .collect::<Vec<_>>()
+                            );
+                        }
                         for m in msgs.drain(..) {
                             match m.msg_type {
-                                TYPE_RESP => { let _ = resp_tx.send(m); }
-                                TYPE_SUB => if let Some(g) = gaze::parse(&m) { let _ = gaze_tx.send((now, g)); },
+                                TYPE_RESP => {
+                                    let _ = resp_tx.send(m);
+                                }
+                                TYPE_SUB => {
+                                    if let Some(g) = gaze::parse(&m) {
+                                        let _ = gaze_tx.send((now, g));
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                     }
                     Err(rusb::Error::Timeout) => {}
-                    Err(e) => { if debug { eprintln!("  rx error {e}"); } break }
+                    Err(e) => {
+                        if debug {
+                            eprintln!("  rx error {e}");
+                        }
+                        break;
+                    }
                 }
             }
         });
-        let calib_blob = calib_path(&serial).and_then(|p| std::fs::read(p).ok()).filter(|b| !b.is_empty());
-        Ok(Device { h, seq: 0, resp_rx, gaze_rx, stop, reader: Some(reader), config, calib_blob, pending: None, serial, verbose: false })
+        let calib_blob = calib_path(&serial)
+            .and_then(|p| std::fs::read(p).ok())
+            .filter(|b| !b.is_empty());
+        Ok(Device {
+            h,
+            seq: 0,
+            resp_rx,
+            gaze_rx,
+            stop,
+            reader: Some(reader),
+            config,
+            calib_blob,
+            pending: None,
+            serial,
+            verbose: false,
+        })
     }
 
     fn send(&mut self, prop: u64, args: &[u8]) -> Result<u32> {
         self.seq += 1;
-        for t in tlv::transfers(&tlv::content(prop, self.seq, args)) { usb::write(&self.h, &t)?; }
+        for t in tlv::transfers(&tlv::content(prop, self.seq, args)) {
+            usb::write(&self.h, &t)?;
+        }
         Ok(self.seq)
     }
 
@@ -78,7 +124,13 @@ impl Device {
             let left = end.saturating_duration_since(Instant::now());
             match self.resp_rx.recv_timeout(left) {
                 Ok(m) if m.seq == seq => {
-                    if self.verbose { eprintln!("  0x{prop:04x} -> status 0x{:08x} ({} B)", m.status, m.raw.len()); }
+                    if self.verbose {
+                        eprintln!(
+                            "  0x{prop:04x} -> status 0x{:08x} ({} B)",
+                            m.status,
+                            m.raw.len()
+                        );
+                    }
                     return Ok(m);
                 }
                 Ok(_) => continue,
@@ -87,15 +139,27 @@ impl Device {
             }
         }
     }
-    fn req(&mut self, prop: u64, args: &[u8]) -> Result<Message> { self.request(prop, args, Duration::from_secs(3)) }
+    fn req(&mut self, prop: u64, args: &[u8]) -> Result<Message> {
+        self.request(prop, args, Duration::from_secs(3))
+    }
     fn req_ok(&mut self, prop: u64, args: &[u8]) -> Result<Message> {
         let m = self.req(prop, args)?;
-        if m.status != 0 { return Err(Error::Status { prop, status: m.status }); }
+        if m.status != 0 {
+            return Err(Error::Status {
+                prop,
+                status: m.status,
+            });
+        }
         Ok(m)
     }
 
     fn display_tlv(&self) -> Vec<u8> {
-        let mut v: Vec<u8> = self.config.corners_um().iter().flat_map(|p| tlv::point3d(p[0], p[1], p[2])).collect();
+        let mut v: Vec<u8> = self
+            .config
+            .corners_um()
+            .iter()
+            .flat_map(|p| tlv::point3d(p[0], p[1], p[2]))
+            .collect();
         v.extend(tlv::sub_id(SUB_ID_DISPLAY_TAG));
         v.extend(tlv::int32(12345));
         v
@@ -108,26 +172,42 @@ impl Device {
     /// Handshake, auth and display setup. Does not start streaming.
     pub fn init(&mut self) -> Result<()> {
         self.req(UPGRADE, &tlv::array_int32(UPGRADE_STREAMS))?;
-        if let Some(b) = self.calib_blob.clone() { self.upload_calibration(&b)?; }
+        if let Some(b) = self.calib_blob.clone() {
+            self.upload_calibration(&b)?;
+        }
         let d = self.display_tlv();
         self.req(CONFIG_3D_SET, &d)?;
         let a: Vec<u8> = [tlv::int32(AUTH_TOKEN), tlv::array_int32(&[0])].concat();
         self.req(AUTH_CHALLENGE, &a)?;
         // AUTH_VERIFY answers 0x20000505 on this firmware but auth still succeeds.
-        let a: Vec<u8> = [tlv::int32(AUTH_TOKEN), tlv::int32(0), tlv::binary(AUTH_HASH), tlv::binary(AUTH_SIG)].concat();
+        let a: Vec<u8> = [
+            tlv::int32(AUTH_TOKEN),
+            tlv::int32(0),
+            tlv::binary(AUTH_HASH),
+            tlv::binary(AUTH_SIG),
+        ]
+        .concat();
         self.req(AUTH_VERIFY, &a)?;
         self.req(MOUNTING_CONFIG, &[])?;
         self.req(AUTH_FINALIZE, &tlv::int32(AUTH_TOKEN))?;
         self.req(STATUS_GET, &[])?;
         self.req(PAUSE_SET, &tlv::int32(1))?;
         self.req(ENABLED_EYE_SET, &tlv::int32(3))?;
-        if let Some(b) = self.calib_blob.clone() { self.upload_calibration(&b)?; }
+        if let Some(b) = self.calib_blob.clone() {
+            self.upload_calibration(&b)?;
+        }
         Ok(())
     }
 
     fn subscribe(&mut self) -> Result<()> {
-        self.req_ok(STREAM_SUBSCRIBE, &[tlv::int32(STREAM_GAZE as u32), tlv::array_int32(&[])].concat())?;
-        self.req(STREAM_SUBSCRIBE, &[tlv::int32(STREAM_PRESENCE as u32), tlv::array_int32(&[])].concat())?;
+        self.req_ok(
+            STREAM_SUBSCRIBE,
+            &[tlv::int32(STREAM_GAZE as u32), tlv::array_int32(&[])].concat(),
+        )?;
+        self.req(
+            STREAM_SUBSCRIBE,
+            &[tlv::int32(STREAM_PRESENCE as u32), tlv::array_int32(&[])].concat(),
+        )?;
         self.req(PAUSE_SET, &tlv::int32(0))?;
         let d = self.display_tlv();
         self.req(CONFIG_3D_SET, &d)?;
@@ -138,7 +218,10 @@ impl Device {
     pub fn start_gaze(&mut self) -> Result<()> {
         self.subscribe()?;
         match self.gaze_rx.recv_timeout(Duration::from_millis(1500)) {
-            Ok(g) => { self.pending = Some(g); Ok(()) }
+            Ok(g) => {
+                self.pending = Some(g);
+                Ok(())
+            }
             Err(_) => Err(Error::Timeout("gaze stream")),
         }
     }
@@ -161,14 +244,18 @@ impl Device {
             let r = Device::open(config.clone()).and_then(|mut d| {
                 d.verbose = verbose;
                 d.init()?;
-                if stream { d.start_gaze()?; }
+                if stream {
+                    d.start_gaze()?;
+                }
                 Ok(d)
             });
             match r {
                 Ok(d) => return Ok(d),
                 Err(Error::NoDevice) => return Err(Error::NoDevice),
                 Err(e) => {
-                    if verbose { eprintln!("  open attempt {attempt} failed: {e}; reopening"); }
+                    if verbose {
+                        eprintln!("  open attempt {attempt} failed: {e}; reopening");
+                    }
                     last = e;
                 }
             }
@@ -177,7 +264,9 @@ impl Device {
     }
 
     pub fn recv_gaze(&mut self, timeout: Duration) -> Result<Option<(Instant, GazeFrame)>> {
-        if let Some(g) = self.pending.take() { return Ok(Some(g)); }
+        if let Some(g) = self.pending.take() {
+            return Ok(Some(g));
+        }
         match self.gaze_rx.recv_timeout(timeout) {
             Ok(g) => Ok(Some(g)),
             Err(mpsc::RecvTimeoutError::Timeout) => Ok(None),
@@ -190,7 +279,10 @@ impl Device {
         let e = m.entries();
         for (i, (t, v)) in e.iter().enumerate() {
             if *t == tlv::T_SUB_ID && tlv::be_u32(v) == Some(SUB_ID_FREQUENCY) {
-                if let (Some(a), Some(b)) = (e.get(i + 1).and_then(|x| tlv::be_u32(x.1)), e.get(i + 2).and_then(|x| tlv::be_u32(x.1))) {
+                if let (Some(a), Some(b)) = (
+                    e.get(i + 1).and_then(|x| tlv::be_u32(x.1)),
+                    e.get(i + 2).and_then(|x| tlv::be_u32(x.1)),
+                ) {
                     out.push(Frequency { a, b });
                 }
             }
@@ -198,7 +290,9 @@ impl Device {
         out
     }
     pub fn frequency(&mut self) -> Result<Option<Frequency>> {
-        Ok(Self::parse_freqs(&self.req_ok(FREQUENCIES_GET, &[])?).first().copied())
+        Ok(Self::parse_freqs(&self.req_ok(FREQUENCIES_GET, &[])?)
+            .first()
+            .copied())
     }
     pub fn frequencies(&mut self) -> Result<Vec<Frequency>> {
         Ok(Self::parse_freqs(&self.req_ok(FREQUENCIES_LIST, &[])?))
@@ -206,22 +300,37 @@ impl Device {
 
     pub fn unit_info(&mut self) -> Result<Vec<String>> {
         let m = self.req_ok(UNIT_INFO_GET, &[])?;
-        Ok(m.entries().iter().filter(|(t, v)| *t == tlv::T_STRING && v.len() >= 4)
-            .map(|(_, v)| String::from_utf8_lossy(&v[4..]).into_owned()).collect())
+        Ok(m.entries()
+            .iter()
+            .filter(|(t, v)| *t == tlv::T_STRING && v.len() >= 4)
+            .map(|(_, v)| String::from_utf8_lossy(&v[4..]).into_owned())
+            .collect())
     }
 
-    pub(crate) fn raw_request(&mut self, prop: u64, args: &[u8]) -> Result<Message> { self.req(prop, args) }
-    pub(crate) fn raw_request_t(&mut self, prop: u64, args: &[u8], t: Duration) -> Result<Message> { self.request(prop, args, t) }
+    pub(crate) fn raw_request(&mut self, prop: u64, args: &[u8]) -> Result<Message> {
+        self.req(prop, args)
+    }
+    pub(crate) fn raw_request_t(&mut self, prop: u64, args: &[u8], t: Duration) -> Result<Message> {
+        self.request(prop, args, t)
+    }
     /// USB serial number, e.g. `IS50F-100200242231`.
-    pub fn serial(&self) -> &str { &self.serial }
-    pub fn config(&self) -> &Config { &self.config }
+    pub fn serial(&self) -> &str {
+        &self.serial
+    }
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
     /// Whether a stored calibration blob was found (and is uploaded by `init`).
-    pub fn has_calibration(&self) -> bool { self.calib_blob.is_some() }
+    pub fn has_calibration(&self) -> bool {
+        self.calib_blob.is_some()
+    }
 }
 
 /// `~/.config/tobii-et5/<serial>/calibration.bin`
 pub fn calib_path(serial: &str) -> Option<std::path::PathBuf> {
-    Config::path().parent().map(|d| d.join(serial).join("calibration.bin"))
+    Config::path()
+        .parent()
+        .map(|d| d.join(serial).join("calibration.bin"))
 }
 
 impl Drop for Device {
@@ -229,10 +338,20 @@ impl Drop for Device {
         // Pause + unsubscribe so the next session starts from a clean state
         // (otherwise every other session got no gaze packets).
         let _ = self.request(PAUSE_SET, &tlv::int32(1), Duration::from_millis(500));
-        let _ = self.request(STREAM_UNSUBSCRIBE, &tlv::int32(STREAM_GAZE as u32), Duration::from_millis(500));
-        let _ = self.request(STREAM_UNSUBSCRIBE, &tlv::int32(STREAM_PRESENCE as u32), Duration::from_millis(500));
+        let _ = self.request(
+            STREAM_UNSUBSCRIBE,
+            &tlv::int32(STREAM_GAZE as u32),
+            Duration::from_millis(500),
+        );
+        let _ = self.request(
+            STREAM_UNSUBSCRIBE,
+            &tlv::int32(STREAM_PRESENCE as u32),
+            Duration::from_millis(500),
+        );
         self.stop.store(true, Ordering::Relaxed);
-        if let Some(r) = self.reader.take() { let _ = r.join(); }
+        if let Some(r) = self.reader.take() {
+            let _ = r.join();
+        }
         let _ = self.h.release_interface(0);
     }
 }

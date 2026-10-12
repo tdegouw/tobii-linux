@@ -8,7 +8,10 @@ pub type Handle = Arc<DeviceHandle<GlobalContext>>;
 /// Opens the tracker; returns the handle and the USB serial number.
 pub fn open() -> Result<(Handle, String)> {
     let h = rusb::open_device_with_vid_pid(VENDOR_ID, PRODUCT_ID).ok_or(Error::NoDevice)?;
-    let serial = h.device().device_descriptor().ok()
+    let serial = h
+        .device()
+        .device_descriptor()
+        .ok()
         .and_then(|d| h.read_serial_number_string_ascii(&d).ok())
         .unwrap_or_else(|| "unknown".into());
     // uvcvideo only binds ifaces 1/2; iface 0 is vendor-specific, detach just in case.
@@ -17,7 +20,9 @@ pub fn open() -> Result<(Handle, String)> {
     }
     // Only set the configuration if needed: re-setting it while uvcvideo holds
     // ifaces 1/2 makes xhci complain ("add endpoint 0x82") and can wedge the device.
-    if h.active_configuration().unwrap_or(0) != 1 { let _ = h.set_active_configuration(1); }
+    if h.active_configuration().unwrap_or(0) != 1 {
+        let _ = h.set_active_configuration(1);
+    }
     h.claim_interface(0)?;
     // vendor request that enables the bulk endpoints.
     // NB: do not libusb-reset on failure: that made the tracker drop off the bus.
