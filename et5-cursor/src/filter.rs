@@ -93,7 +93,8 @@ impl GazeFilter {
         self.fy = OneEuro::new();
         self.last_raw = None;
     }
-    /// One-euro smoothed position only (no dead zone), for focus mode.
+    /// One-euro smoothed position only (no dead zone); the pre-0.2 focus-mode path, kept for tests.
+    #[cfg(test)]
     pub fn smooth(&mut self, x: f64, y: f64, dt: f64) -> (f64, f64) {
         let dt = dt.clamp(0.005, 0.2);
         if let Some((lx, ly)) = self.last_raw {

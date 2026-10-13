@@ -5,6 +5,7 @@
 //!   et5-cursor toggle|on|off        control the daemon (shows a notification)
 //!   et5-cursor mode focus|cursor    switch mode (focus = gaze focuses windows, default)
 //!   et5-cursor status               print state and mode
+mod dwell;
 mod filter;
 mod hypr;
 
@@ -44,13 +45,28 @@ struct FocusConfig {
     margin_px: f64,
     /// Ignore gaze for this long after the mouse moved.
     mouse_quiet_ms: u64,
+    /// Fraction of samples during the dwell that must hit the new window (0.5-1).
+    majority: f64,
+    /// Drop the candidate after this long without a single hit on it (blinks, outliers).
+    max_gap_ms: u64,
+    /// Gaze smoothing for hit-testing: 1 = raw, lower = smoother but slower.
+    smooth: f64,
+    /// Jumps larger than this (px) skip the smoothing.
+    saccade_px: f64,
+    /// Log the latency of every focus switch to the journal.
+    log_latency: bool,
 }
 impl Default for FocusConfig {
     fn default() -> Self {
         FocusConfig {
-            dwell_ms: 400,
+            dwell_ms: 200,
             margin_px: 80.0,
             mouse_quiet_ms: 1000,
+            majority: 0.7,
+            max_gap_ms: 100,
+            smooth: 0.7,
+            saccade_px: 300.0,
+            log_latency: true,
         }
     }
 }
@@ -84,7 +100,11 @@ impl CursorConfig {
         fix("saccade_px", &mut f.saccade_px, 1.0, 10000.0);
         fix("follow", &mut f.follow, 0.01, 1.0);
         fix("margin_px", &mut self.focus.margin_px, 0.0, 1000.0);
+        fix("majority", &mut self.focus.majority, 0.5, 1.0);
+        fix("smooth", &mut self.focus.smooth, 0.05, 1.0);
+        fix("focus.saccade_px", &mut self.focus.saccade_px, 1.0, 10000.0);
         self.focus.dwell_ms = self.focus.dwell_ms.clamp(50, 10_000);
+        self.focus.max_gap_ms = self.focus.max_gap_ms.clamp(0, 2_000);
         self
     }
 }
@@ -239,7 +259,7 @@ fn daemon() -> i32 {
         "et5-cursor: {w}x{h}, state off, mode {:?}, focus {:?}, filter {:?}",
         cfg.mode, cfg.focus, cfg.filter
     );
-    let mut focus = FocusState::new(cfg.focus.clone());
+    let mut focus = FocusState::new(cfg.focus.clone(), hypr::watch_events());
 
     while !term.load(Ordering::Relaxed) {
         // (Re)connect; a missing or replugged tracker is retried every 3 s.
@@ -303,8 +323,7 @@ fn daemon() -> i32 {
                 c[1].clamp(0.0, 1.0) * h as f64,
             );
             if !cursor {
-                let (sx, sy) = filt.smooth(x, y, dt);
-                focus.update(sx, sy, at);
+                focus.update(x, y, at);
                 continue;
             }
             if ptr.is_none() {
@@ -345,34 +364,49 @@ fn daemon() -> i32 {
     0
 }
 
-/// Gaze-to-focus state machine: dwell + hysteresis, suspended while the mouse moves.
+/// Gaze-to-focus state machine: light smoothing + tolerant dwell + hysteresis,
+/// suspended while the mouse moves. The window list is cached and only refreshed
+/// when Hyprland reports a relevant event (socket2), or every 2 s as a fallback
+/// for changes without an event (e.g. resizing a split).
 struct FocusState {
     cfg: FocusConfig,
+    dcfg: dwell::DwellCfg,
+    point: dwell::FocusPoint,
+    dwell: dwell::Dwell,
+    dirty: Arc<AtomicBool>,
     snap: Option<hypr::Snapshot>,
     snap_at: Option<Instant>,
     mouse: Option<(i64, i64)>,
     mouse_at: Option<Instant>,
     mouse_moved: Option<Instant>,
-    candidate: Option<(String, Instant)>,
 }
 impl FocusState {
-    fn new(cfg: FocusConfig) -> Self {
+    fn new(cfg: FocusConfig, dirty: Arc<AtomicBool>) -> Self {
         FocusState {
+            dcfg: dwell::DwellCfg {
+                dwell: Duration::from_millis(cfg.dwell_ms),
+                majority: cfg.majority,
+                max_gap: Duration::from_millis(cfg.max_gap_ms),
+            },
+            point: dwell::FocusPoint::new(cfg.smooth, cfg.saccade_px),
+            dwell: dwell::Dwell::default(),
             cfg,
+            dirty,
             snap: None,
             snap_at: None,
             mouse: None,
             mouse_at: None,
             mouse_moved: None,
-            candidate: None,
         }
     }
     fn reset(&mut self) {
-        self.candidate = None;
+        self.dwell.reset();
+        self.point.reset();
         self.snap = None;
         self.mouse = None;
     }
     fn update(&mut self, x: f64, y: f64, now: Instant) {
+        let (x, y) = self.point.update(x, y);
         // Mouse activity (polled at 10 Hz)
         if self
             .mouse_at
@@ -382,7 +416,7 @@ impl FocusState {
             let p = hypr::cursor_pos();
             if p.is_some() && self.mouse.is_some() && p != self.mouse {
                 self.mouse_moved = Some(now);
-                self.candidate = None;
+                self.dwell.reset();
             }
             self.mouse = p;
         }
@@ -392,42 +426,45 @@ impl FocusState {
         {
             return;
         }
-        // Window layout (polled at 4 Hz)
-        if self
-            .snap_at
-            .is_none_or(|t| now.duration_since(t) > Duration::from_millis(250))
+        // Window layout: on Hyprland events, else every 2 s.
+        if self.dirty.swap(false, Ordering::Relaxed)
+            || self.snap.is_none()
+            || self
+                .snap_at
+                .is_none_or(|t| now.duration_since(t) > Duration::from_secs(2))
         {
             self.snap_at = Some(now);
             self.snap = hypr::snapshot();
         }
         let Some(snap) = &self.snap else { return };
         if snap.blocked {
-            self.candidate = None;
+            self.dwell.reset();
             return;
         }
-        let m = self.cfg.margin_px;
-        let Some(win) = hypr::hit_test(&snap.windows, x, y, m).cloned() else {
-            self.candidate = None;
+        let hit = hypr::hit_test(&snap.windows, x, y, self.cfg.margin_px)
+            .map(|w| w.addr.as_str())
+            .filter(|a| snap.active.as_deref() != Some(a));
+        let since = self.dwell.since();
+        let Some(addr) = self.dwell.feed(hit, now, &self.dcfg) else {
             return;
         };
-        if snap.active.as_deref() == Some(&win.addr) {
-            self.candidate = None;
-            return;
+        let t = Instant::now();
+        let r = hypr::focus(&addr, snap.no_warps);
+        if self.cfg.log_latency {
+            let dwell = since.map_or(0, |s| now.duration_since(s).as_millis());
+            let total = since.map_or(0, |s| s.elapsed().as_millis());
+            eprintln!(
+                "focus {addr}: dwell {dwell} ms, ipc {} us, gaze-to-focus {total} ms{}",
+                t.elapsed().as_micros(),
+                r.as_ref()
+                    .err()
+                    .map_or(String::new(), |e| format!(" ({e})"))
+            );
+        } else if let Err(e) = r {
+            eprintln!("focus {addr}: {e}");
         }
-        match &self.candidate {
-            Some((a, since)) if *a == win.addr => {
-                if now.duration_since(*since) >= Duration::from_millis(self.cfg.dwell_ms) {
-                    match hypr::focus(&win.addr) {
-                        Ok(_) => eprintln!("focus {}", win.addr),
-                        Err(e) => eprintln!("focus {}: {e}", win.addr),
-                    }
-                    if let Some(s) = &mut self.snap {
-                        s.active = Some(win.addr.clone());
-                    }
-                    self.candidate = None;
-                }
-            }
-            _ => self.candidate = Some((win.addr.clone(), now)),
+        if let Some(s) = &mut self.snap {
+            s.active = Some(addr);
         }
     }
 }

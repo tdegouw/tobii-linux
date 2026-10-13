@@ -84,7 +84,12 @@ The daemon starts **OFF** after every login; press the hotkey to enable.
 | key | default | effect |
 |---|---|---|
 | `mode` | `"focus"` | `"focus"` or `"cursor"` |
-| `focus.dwell_ms` | 400 | how long you must look at another window before it gets focus |
+| `focus.dwell_ms` | 200 | how long you must look at another window before it gets focus |
+| `focus.majority` | 0.7 | share of gaze samples during the dwell that must be on the new window (blinks/outliers tolerated) |
+| `focus.max_gap_ms` | 100 | drop the candidate window after this long without a sample on it |
+| `focus.smooth` | 0.7 | hit-test smoothing (1 = raw gaze, lower = steadier but slower) |
+| `focus.saccade_px` | 300 | jumps larger than this skip the smoothing |
+| `focus.log_latency` | true | log `dwell / ipc / gaze-to-focus` per switch to the journal |
 | `focus.margin_px` | 80 | gaze must be this far inside the window (hysteresis) |
 | `focus.mouse_quiet_ms` | 1000 | ignore gaze this long after the mouse moved |
 | `filter.min_cutoff` | 0.6 | lower = smoother but laggier when still |

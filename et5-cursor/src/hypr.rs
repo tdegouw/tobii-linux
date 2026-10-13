@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-//! Minimal Hyprland IPC client (request socket `.socket.sock`).
+//! Minimal Hyprland IPC client (request socket `.socket.sock`, events on `.socket2.sock`).
 use serde_json::Value;
 use std::{
-    io::{Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::net::UnixStream,
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
@@ -24,6 +28,50 @@ pub fn socket() -> Option<PathBuf> {
         .map(|e| e.path().join(".socket.sock"))
         .filter(|p| p.exists())
         .max_by_key(|p| p.metadata().and_then(|m| m.modified()).ok())
+}
+
+/// Hyprland events that can change what focus mode sees. Title changes etc. are ignored.
+fn relevant_event(line: &str) -> bool {
+    let name = line.split(">>").next().unwrap_or("");
+    let name = name.strip_suffix("v2").unwrap_or(name);
+    matches!(
+        name,
+        "activewindow"
+            | "openwindow"
+            | "closewindow"
+            | "movewindow"
+            | "workspace"
+            | "focusedmon"
+            | "changefloatingmode"
+            | "fullscreen"
+            | "openlayer"
+            | "closelayer"
+            | "minimized"
+            | "moveworkspace"
+            | "pin"
+    )
+}
+
+/// Listen on `.socket2.sock` in a thread; the returned flag is set whenever the
+/// window layout may have changed. Reconnects every 2 s if Hyprland restarts.
+pub fn watch_events() -> Arc<AtomicBool> {
+    let dirty = Arc::new(AtomicBool::new(true));
+    let d = dirty.clone();
+    std::thread::spawn(move || loop {
+        if let Some(p) = socket().map(|p| p.with_file_name(".socket2.sock")) {
+            if let Ok(s) = UnixStream::connect(p) {
+                d.store(true, Ordering::Relaxed);
+                for line in BufReader::new(s).lines() {
+                    let Ok(line) = line else { break };
+                    if relevant_event(&line) {
+                        d.store(true, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        std::thread::sleep(Duration::from_secs(2));
+    });
+    dirty
 }
 
 pub fn request(cmd: &str) -> std::io::Result<String> {
@@ -55,6 +103,8 @@ pub struct Snapshot {
     pub active: Option<String>,
     /// Focus switching should be suspended (fullscreen, floating popup focused, launcher/overlay layer open).
     pub blocked: bool,
+    /// `cursor:no_warps` as configured by the user (read with the snapshot).
+    pub no_warps: bool,
 }
 
 fn layer_blocks(v: &Value) -> bool {
@@ -121,6 +171,7 @@ pub fn snapshot() -> Option<Snapshot> {
         windows,
         active,
         blocked,
+        no_warps: no_warps().unwrap_or(false),
     })
 }
 
@@ -165,8 +216,8 @@ pub fn focus_batch(addr: &str, already_no_warps: bool) -> Option<String> {
 
 /// Focus a window without warping the pointer: no_warps is enabled only for this
 /// dispatch (in one IPC batch) and restored to `false` afterwards.
-pub fn focus(addr: &str) -> std::io::Result<String> {
-    let cmd = focus_batch(addr, no_warps().unwrap_or(false)).ok_or_else(|| {
+pub fn focus(addr: &str, already_no_warps: bool) -> std::io::Result<String> {
+    let cmd = focus_batch(addr, already_no_warps).ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "bad window address")
     })?;
     request(&cmd)
@@ -208,6 +259,14 @@ mod tests {
         );
         // outside everything
         assert!(hit_test(&ws, 6000.0, 700.0, 80.0).is_none());
+    }
+
+    #[test]
+    fn events() {
+        assert!(relevant_event("activewindowv2>>5b14e2cea6e0"));
+        assert!(relevant_event("openwindow>>0x1,1,kitty,t"));
+        assert!(!relevant_event("windowtitlev2>>5b14,foo"));
+        assert!(!relevant_event("activelayout>>kbd,us"));
     }
 
     #[test]

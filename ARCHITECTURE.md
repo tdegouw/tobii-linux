@@ -27,6 +27,7 @@ flowchart LR
     CAL --- DEV
     CFG --- DEV
     CUR -- j/clients · focus batch --> HYP
+    HYP -- socket2 events --> CUR
     CUR -- ABS_X/ABS_Y --> UIN
 ```
 
@@ -86,11 +87,23 @@ the same session does not help; closing and reopening does. `Device::open_ready`
 USB transfer (1724 B, ~33 Hz) → Deframer → gaze::parse → GazeFrame{left,right,combined 0..1}
    → no eyes? freeze
    → pixels (× 5120/1440) → one-euro filter (min_cutoff, beta, d_cutoff; reset on saccade)
-       ├─ focus mode: hit_test(windows, margin) → same window for dwell_ms → focus
+       ├─ focus mode: light EMA (snap on saccade) → hit_test(windows, margin)
+       │    → tolerant dwell (dwell_ms, majority, max_gap_ms) → focus
        └─ cursor mode: dead zone → follow / saccade jump → uinput ABS_X/ABS_Y
 ```
 
 ### Focus mode and Hyprland IPC
+
+- Latency: focus mode does not use the cursor-mode one-euro filter (its lag added
+  30–90 ms on short jumps). The raw point gets a light EMA (`smooth`) that snaps on
+  jumps > `saccade_px`. The dwell is tolerant: a window wins after `dwell_ms` when at
+  least `majority` of the samples hit it and no gap exceeded `max_gap_ms`, so one
+  outlier or blink no longer restarts the timer. At 33 Hz the 200 ms default fires on
+  the 8th sample (~212 ms).
+- Window list: cached; refreshed when `.socket2.sock` reports a relevant event
+  (open/close/move window, active window, workspace, floating, fullscreen, layers),
+  plus every 2 s for changes without an event (split resizing). `no_warps` is read with
+  the snapshot, so a focus switch is one IPC call (~0.2–0.4 ms).
 
 - Socket: `$XDG_RUNTIME_DIR/hypr/$HYPRLAND_INSTANCE_SIGNATURE/.socket.sock` (falls back to
   the newest instance directory if the signature is not in the service environment).
@@ -128,7 +141,7 @@ uploaded by every later `init`. Esc/q aborts and sends `STOP`.
 | file | contents |
 |---|---|
 | `~/.config/tobii-et5/config.toml` | display px and mm, tracker offset (validated) |
-| `~/.config/tobii-et5/cursor.toml` | `mode`, `[focus]` dwell/margin/mouse quiet, `[filter]` one-euro + dead zone (clamped) |
+| `~/.config/tobii-et5/cursor.toml` | `mode`, `[focus]` dwell/majority/gap/smoothing/margin/mouse quiet, `[filter]` one-euro + dead zone for cursor mode (clamped) |
 | `~/.config/tobii-et5/<serial>/calibration.bin` | calibration blob |
 
 ## Known limits
